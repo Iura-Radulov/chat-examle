@@ -1,89 +1,155 @@
 import React, { useEffect, useState } from 'react';
 import { StreamChat } from 'stream-chat';
-import { Chat, enTranslations, Streami18n } from 'stream-chat-react';
+import { Chat, Channel, ChannelList } from 'stream-chat-react';
+import { useChecklist } from './ChecklistTasks';
 
-import 'stream-chat-react/dist/css/index.css';
+import '@stream-io/stream-chat-css/dist/css/index.css';
 import './App.css';
 
+import {
+  CreateChannel,
+  CustomMessage,
+  MessagingChannelList,
+  MessagingChannelPreview,
+  MessagingInput,
+  MessagingThreadHeader,
+} from './components';
+
 import { getRandomImage } from './assets';
-import { useChecklist } from './ChecklistTasks';
-import { ChannelContainer } from './components/ChannelContainer/ChannelContainer';
-import { ChannelListContainer } from './components/ChannelListContainer/ChannelListContainer';
+import { ChannelInner } from './components/ChannelInner/ChannelInner';
 
 const urlParams = new URLSearchParams(window.location.search);
+
 const apiKey = urlParams.get('apikey') || process.env.REACT_APP_STREAM_KEY;
 const user = urlParams.get('user') || process.env.REACT_APP_USER_ID;
-const theme = urlParams.get('theme') || 'light';
 const userToken = urlParams.get('user_token') || process.env.REACT_APP_USER_TOKEN;
 const targetOrigin = urlParams.get('target_origin') || process.env.REACT_APP_TARGET_ORIGIN;
 
-const i18nInstance = new Streami18n({
-  language: 'en',
-  translationsForLanguage: {
-    ...enTranslations,
-  },
-});
+const noChannelNameFilter = urlParams.get('no_channel_name_filter') || false;
+const skipNameImageSet = urlParams.get('skip_name_image_set') || false;
 
-const filters = [
-  { type: 'team', demo: 'team' },
-  { type: 'messaging', demo: 'team' },
-];
-const options = { state: true, watch: true, presence: true, limit: 3 };
-const sort = { last_message_at: -1, updated_at: -1 };
+const filters = noChannelNameFilter
+  ? { type: 'messaging', members: { $in: [user] } }
+  : { type: 'messaging', name: 'Social Demo', demo: 'social' };
 
-const client = StreamChat.getInstance(apiKey, { enableInsights: true, enableWSFallback: true });
-client.connectUser({ id: user, name: user, image: getRandomImage() }, userToken);
+const options = { state: true, watch: true, presence: true, limit: 8 };
+
+const sort = {
+  last_message_at: -1,
+  updated_at: -1,
+};
+
+const userToConnect = { id: user, name: user, image: getRandomImage() };
+
+if (skipNameImageSet) {
+  delete userToConnect.name;
+  delete userToConnect.image;
+}
+
+export const GiphyContext = React.createContext({});
 
 const App = () => {
-  const [createType, setCreateType] = useState('');
+  const [chatClient, setChatClient] = useState(null);
+  const [giphyState, setGiphyState] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
-  const [isEditing, setIsEditing] = useState(false);
+  const [isMobileNavVisible, setMobileNav] = useState(false);
+  const [theme, setTheme] = useState('dark');
 
-  useChecklist(client, targetOrigin);
+  useChecklist(chatClient, targetOrigin);
 
   useEffect(() => {
-    const handleColorChange = (color) => {
-      const root = document.documentElement;
-      if (color.length && color.length === 7) {
-        root.style.setProperty('--primary-color', `${color}E6`);
-        root.style.setProperty('--primary-color-alpha', `${color}1A`);
+    const initChat = async () => {
+      const client = StreamChat.getInstance(apiKey, {
+        enableInsights: true,
+        enableWSFallback: true,
+      });
+      await client.connectUser(userToConnect, userToken);
+      setChatClient(client);
+    };
+
+    initChat();
+
+    return () => chatClient?.disconnectUser();
+  }, []); // eslint-disable-line
+
+  useEffect(() => {
+    const handleThemeChange = ({ data, origin }) => {
+      // handle events only from trusted origin
+      if (origin === targetOrigin) {
+        if (data === 'light' || data === 'dark') {
+          setTheme(data);
+        }
       }
     };
 
-    window.addEventListener('message', (event) => handleColorChange(event.data));
-    return () => {
-      client.disconnectUser();
-      window.removeEventListener('message', (event) => handleColorChange(event.data));
-    };
+    window.addEventListener('message', handleThemeChange);
+    return () => window.removeEventListener('message', handleThemeChange);
   }, []);
 
+  useEffect(() => {
+    const mobileChannelList = document.querySelector('#mobile-channel-list');
+    if (isMobileNavVisible && mobileChannelList) {
+      mobileChannelList.classList.add('show');
+      document.body.style.overflow = 'hidden';
+    } else if (!isMobileNavVisible && mobileChannelList) {
+      mobileChannelList.classList.remove('show');
+      document.body.style.overflow = 'auto';
+    }
+  }, [isMobileNavVisible]);
+
+  useEffect(() => {
+    /*
+     * Get the actual rendered window height to set the container size properly.
+     * In some browsers (like Safari) the nav bar can override the app.
+     */
+    const setAppHeight = () => {
+      const doc = document.documentElement;
+      doc.style.setProperty('--app-height', `${window.innerHeight}px`);
+    };
+
+    setAppHeight();
+
+    window.addEventListener('resize', setAppHeight);
+    return () => window.removeEventListener('resize', setAppHeight);
+  }, []);
+
+  const toggleMobile = () => setMobileNav(!isMobileNavVisible);
+
+  const giphyContextValue = { giphyState, setGiphyState };
+
+  if (!chatClient) return null;
+
   return (
-    <>
-      <div className='app__wrapper'>
-        <Chat {...{ client, i18nInstance }} theme={`team ${theme}`}>
-          <ChannelListContainer
-            {...{
-              isCreating,
-              filters,
-              options,
-              setCreateType,
-              setIsCreating,
-              setIsEditing,
-              sort,
-            }}
-          />
-          <ChannelContainer
-            {...{
-              createType,
-              isCreating,
-              isEditing,
-              setIsCreating,
-              setIsEditing,
-            }}
-          />
-        </Chat>
+    <Chat client={chatClient} theme={`messaging ${theme}`}>
+      <div id='mobile-channel-list' onClick={toggleMobile}>
+        <ChannelList
+          filters={filters}
+          sort={sort}
+          options={options}
+          List={(props) => (
+            <MessagingChannelList {...props} onCreateChannel={() => setIsCreating(!isCreating)} />
+          )}
+          Preview={(props) => <MessagingChannelPreview {...props} {...{ setIsCreating }} />}
+        />
       </div>
-    </>
+      <div>
+        <Channel
+          Input={MessagingInput}
+          maxNumberOfFiles={10}
+          Message={CustomMessage}
+          multipleUploads={true}
+          ThreadHeader={MessagingThreadHeader}
+          TypingIndicator={() => null}
+        >
+          {isCreating && (
+            <CreateChannel toggleMobile={toggleMobile} onClose={() => setIsCreating(false)} />
+          )}
+          <GiphyContext.Provider value={giphyContextValue}>
+            <ChannelInner theme={theme} toggleMobile={toggleMobile} />
+          </GiphyContext.Provider>
+        </Channel>
+      </div>
+    </Chat>
   );
 };
 
